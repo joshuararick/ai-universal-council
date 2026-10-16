@@ -1,6 +1,6 @@
-# Allow-list: only what the image needs
+# Allow-list: only what the image needs (keeps .env and secrets out)
 *
 !requirements.txt
-!core/
-!config/
+!council.toml
+!council/
 **/__pycache__

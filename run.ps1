@@ -1,6 +1,11 @@
-# Usage: .\run.ps1 [-Roster free] [directive...]
-param([string]$Roster = "default", [Parameter(ValueFromRemainingArguments)][string[]]$Directive)
+# Ask the Council.
+#   .\run.ps1 "Should I use Postgres or SQLite?"
+#   .\run.ps1 -Roster free "question"      (free models, no credits needed)
+#   .\run.ps1 --check                      (verify model IDs, no key needed)
+param([string]$Roster = "default", [Parameter(ValueFromRemainingArguments)][string[]]$Rest)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
-if (-not (Test-Path $python)) { $python = "py" }
-& $python "$PSScriptRoot\core\council.py" --roster $Roster @Directive
+if (-not (Test-Path $python)) { Write-Host "Run .\setup.ps1 first." -ForegroundColor Red; exit 1 }
+Push-Location $PSScriptRoot
+try { & $python -m council --roster $Roster @Rest } finally { Pop-Location }
+exit $LASTEXITCODE
