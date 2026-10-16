@@ -11,12 +11,12 @@ class UniversalCouncil:
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         
-        # Updated with stable OpenRouter model IDs and explicit max_tokens limits (< 4000)
+        # Verified current OpenRouter model slugs
         self.models = {
-            "Chief of Staff (Gemini)": "google/gemini-2.0-flash-001",
+            "Chief of Staff (Gemini)": "google/gemini-flash-1.5",
             "Lead Engineer (Claude)": "anthropic/claude-3.5-sonnet",
             "Architect (GPT)": "openai/gpt-4o-mini",
-            "Tactician (Grok)": "x-ai/grok-2-1212"
+            "Tactician (Grok)": "x-ai/grok-2"
         }
 
     def query_model(self, model_name: str, model_id: str, prompt: str) -> str:
