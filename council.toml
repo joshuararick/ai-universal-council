@@ -1,0 +1,55 @@
+# The Council roster. Swap any model ID here, no code changes needed.
+# Verify every ID (no key needed, $0):  python -m council --check
+
+[settings]
+timeout_seconds = 120
+max_tokens = 1000
+max_prompt_chars = 8000
+
+# ---------------------------------------------------------------- default (paid)
+[rosters.default]
+chair = "anthropic/claude-sonnet-5.5"  # reads every answer, writes the verdict
+
+[[rosters.default.members]]
+name = "Chief of Staff"
+model = "google/gemini-3.8-flash"
+role = "You keep the big picture: priorities, trade-offs, what matters most."
+
+[[rosters.default.members]]
+name = "Lead Engineer"
+model = "anthropic/claude-sonnet-5.5"
+role = "You focus on how to actually build it: concrete steps, code, pitfalls."
+
+[[rosters.default.members]]
+name = "Architect"
+model = "openai/gpt-6.1-sol"
+role = "You focus on structure: components, boundaries, how it scales."
+
+[[rosters.default.members]]
+name = "Tactician"
+model = "x-ai/grok-4.7"
+role = "You are the skeptic: find what will break, what's missing, what's overkill."
+
+# ---------------------------------------------------------------- free (rate-limited, no credits)
+[rosters.free]
+chair = "nvidia/nemotron-3-super-120b-a12b:free"
+
+[[rosters.free.members]]
+name = "Chief of Staff"
+model = "google/gemma-4-31b-it:free"
+role = "You keep the big picture: priorities, trade-offs, what matters most."
+
+[[rosters.free.members]]
+name = "Lead Engineer"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+role = "You focus on how to actually build it: concrete steps, code, pitfalls."
+
+[[rosters.free.members]]
+name = "Architect"
+model = "dots-studio/dots-3-note-preview:free"
+role = "You focus on structure: components, boundaries, how it scales."
+
+[[rosters.free.members]]
+name = "Tactician"
+model = "poolside/laguna-s-2.1:free"
+role = "You are the skeptic: find what will break, what's missing, what's overkill."

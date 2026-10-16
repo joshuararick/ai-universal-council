@@ -7,11 +7,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --require-hashes -r requirements.txt
 
-COPY core/ core/
-COPY config/ config/
+COPY council.toml .
+COPY council/ council/
 
 # Run as an unprivileged user; app files stay root-owned and read-only to it.
 RUN useradd --system --uid 10001 --no-create-home council
 USER 10001
 
-ENTRYPOINT ["python", "core/council.py"]
+# Anything after the image name becomes the question / flags.
+ENTRYPOINT ["python", "-m", "council"]
