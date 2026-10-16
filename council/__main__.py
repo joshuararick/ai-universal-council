@@ -17,6 +17,7 @@ import requests
 
 from . import ollama
 from .config import (
+    PROVIDERS,
     ConfigError,
     all_model_ids,
     load_api_key,
@@ -24,7 +25,7 @@ from .config import (
     load_raw,
     provider_of,
 )
-from .council import Council
+from .council import Council, validate_question
 from .openrouter import OpenRouterClient, OpenRouterError, list_models
 
 
@@ -57,6 +58,11 @@ def check_local(raw: dict) -> None:
 
 def check() -> int:
     raw = load_raw()
+    for roster, r in raw["rosters"].items():  # a typo here must fail CI, not slip past both checks
+        if provider_of(r) not in PROVIDERS:
+            raise ConfigError(
+                f"Roster '{roster}' has unknown provider '{provider_of(r)}'. Use: {', '.join(PROVIDERS)}"
+            )
     available = list_models()
     remote = {n: r for n, r in raw["rosters"].items() if provider_of(r) == "openrouter"}
     rosters = all_model_ids({"rosters": remote})
@@ -101,7 +107,9 @@ def make_client(config):
         if set(models) - ollama.list_models():
             print("Downloading local models (one time, a few GB)...", file=sys.stderr)
             ollama.pull_missing(models)
-        return ollama.OllamaClient(config.timeout_seconds, config.max_tokens)
+        return ollama.OllamaClient(
+            config.timeout_seconds, config.max_tokens, unload_after=config.max_parallel == 1
+        )
     return OpenRouterClient(config.api_key, config.timeout_seconds, config.max_tokens)
 
 
@@ -136,13 +144,17 @@ def main(argv=None) -> int:
         if args.check:
             return check()
         config = load_config(pick_roster(args.roster))
-        client = make_client(config)
         if args.pull:
             if config.provider != "ollama":
                 raise ConfigError(f"--pull is for local rosters; '{config.roster}' runs on OpenRouter.")
-            print("Local models ready.")  # make_client already downloaded anything missing
+            make_client(config)  # starts Ollama and downloads anything missing
+            print("Local models ready.")
             return 0
-        question = " ".join(args.question) or input("Ask the Council: ")
+        # Check the question first: a bad one must not trigger a multi-GB download.
+        question = validate_question(
+            " ".join(args.question) or input("Ask the Council: "), config.max_prompt_chars
+        )
+        client = make_client(config)
         names = ", ".join(s.name for s in config.members)
         print(f"Convening the {config.roster} council: {names}...\n", file=sys.stderr)
         result = Council(config, client).convene(question)

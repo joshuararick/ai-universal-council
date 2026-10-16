@@ -60,7 +60,7 @@ role = "You are the skeptic: find what will break, what's missing, what's overki
 # Downloads ~10 GB once. Used automatically when no OpenRouter key is found.
 [rosters.local]
 provider = "ollama"
-max_parallel = 1          # one model in memory at a time: works on an ordinary PC
+max_parallel = 1          # one model at a time, unloaded after it answers: fits an ordinary PC
 timeout_seconds = 600     # CPUs are slower than cloud GPUs
 chair = "gemma3:4b"
 

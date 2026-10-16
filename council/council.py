@@ -39,6 +39,15 @@ MEMBER ANSWERS:
 {answers}"""
 
 
+def validate_question(question: str, max_chars: int) -> str:
+    question = question.strip()
+    if not question:
+        raise ValueError("Ask the Council something.")
+    if len(question) > max_chars:
+        raise ValueError(f"Question too long ({len(question)} > {max_chars} chars).")
+    return question
+
+
 class Council:
     def __init__(self, config: Config, client):
         self.config = config
@@ -57,13 +66,7 @@ class Council:
             return Opinion(seat, error=str(e))
 
     def convene(self, question: str) -> Verdict:
-        question = question.strip()
-        if not question:
-            raise ValueError("Ask the Council something.")
-        if len(question) > self.config.max_prompt_chars:
-            raise ValueError(
-                f"Question too long ({len(question)} > {self.config.max_prompt_chars} chars)."
-            )
+        question = validate_question(question, self.config.max_prompt_chars)
 
         # Fan out: all members at once, not one after another
         # (unless the roster caps it, e.g. local models sharing one PC's memory).

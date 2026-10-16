@@ -276,6 +276,29 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(cli.main(["--check"]), 0)
         self.assertIn("Ollama not running", out.getvalue())
 
+    def test_check_rejects_unknown_provider(self):
+        raw = {"rosters": {"x": {"provider": "olama", "chair": "a", "members": []}}}
+        err = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_raw", return_value=raw),
+            mock.patch.object(cli, "list_models") as remote,
+            redirect_stderr(err),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(cli.main(["--check"]), 1)
+        remote.assert_not_called()
+        self.assertIn("unknown provider", err.getvalue())
+
+    def test_bad_question_is_rejected_before_any_download(self):
+        with (
+            mock.patch.object(cli, "load_api_key", return_value=None),
+            mock.patch.object(cli, "make_client") as make,
+            redirect_stderr(io.StringIO()),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(cli.main(["--roster", "local", "   "]), 1)
+        make.assert_not_called()
+
     def test_no_key_and_no_roster_falls_back_to_local(self):
         with (
             mock.patch.object(cli, "load_api_key", return_value=None),
@@ -289,9 +312,11 @@ class TestConfig(unittest.TestCase):
 
 # ------------------------------------------------------------------ Ollama (local) client
 class TestOllama(unittest.TestCase):
+    unload = False
+
     def chat_with(self, **post_kwargs):
-        client = ollama.OllamaClient(timeout=5, max_tokens=50)
-        with mock.patch.object(ollama.requests, "post", **post_kwargs) as post:
+        client = ollama.OllamaClient(timeout=5, max_tokens=50, unload_after=self.unload)
+        with mock.patch.object(ollama._http, "post", **post_kwargs) as post:
             try:
                 return client.chat("m:1b", [{"role": "user", "content": "p"}]), post
             except ollama.OllamaError as e:
@@ -307,6 +332,26 @@ class TestOllama(unittest.TestCase):
         self.assertNotIn("headers", kwargs)
         self.assertIs(kwargs["json"]["stream"], False)
         self.assertEqual(kwargs["json"]["options"]["num_predict"], 50)
+
+    def test_never_uses_proxy_settings_for_localhost(self):
+        self.assertIs(ollama._http.trust_env, False)
+
+    def test_unload_after_answering_when_asked(self):
+        self.unload = True
+        _, post = self.chat_with(return_value=fake_response(200, {"message": {"content": "x"}}))
+        self.assertEqual(post.call_args.kwargs["json"]["keep_alive"], 0)
+        self.unload = False
+        _, post = self.chat_with(return_value=fake_response(200, {"message": {"content": "x"}}))
+        self.assertNotIn("keep_alive", post.call_args.kwargs["json"])
+
+    def test_pull_has_a_finite_stall_timeout(self):
+        resp = mock.MagicMock(status_code=200)
+        resp.__enter__.return_value = resp
+        resp.iter_lines.return_value = [b'{"status":"success"}']
+        with mock.patch.object(ollama._http, "post", return_value=resp) as post:
+            ollama.pull("m:1b", out=io.StringIO())
+        connect, read = post.call_args.kwargs["timeout"]
+        self.assertIsNotNone(read)
 
     def test_strips_thinking(self):
         body = {"message": {"content": "<think>\nhmm\n</think>\n\nAnswer."}}

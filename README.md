@@ -58,7 +58,7 @@ CI runs the same check weekly, so you'll find out when a model is retired.
 | `council/ollama.py` | Local models: talks only to Ollama on `127.0.0.1`, starts it, downloads models. |
 | `council/council.py` | The brain: fan-out to members, fan-in to the Chair. |
 | `council/__main__.py` | The command line. |
-| `tests/` | 34 offline tests: no network, no key, $0. `python -m unittest` |
+| `tests/` | 39 offline tests: no network, no key, $0. `python -m unittest` |
 
 ## Docker
 

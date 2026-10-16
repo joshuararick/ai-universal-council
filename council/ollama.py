@@ -17,6 +17,11 @@ import requests
 API = "http://127.0.0.1:11434/api"
 INSTALL_HINT = "Install Ollama from https://ollama.com/download (or run .\\setup.ps1 -Local)."
 THINK = re.compile(r"<think>.*?</think>", re.DOTALL)  # some models show their scratch work
+PULL_STALL_SECONDS = 600  # a download that sends nothing for this long has stalled
+
+# Never route localhost traffic through HTTP(S)_PROXY: prompts and answers stay on this PC.
+_http = requests.Session()
+_http.trust_env = False
 
 
 class OllamaError(RuntimeError):
@@ -25,7 +30,7 @@ class OllamaError(RuntimeError):
 
 def is_running(timeout: float = 2) -> bool:
     try:
-        return requests.get(f"{API}/version", timeout=timeout).ok
+        return _http.get(f"{API}/version", timeout=timeout).ok
     except requests.RequestException:
         return False
 
@@ -62,7 +67,7 @@ def ensure_running(wait_seconds: int = 20) -> None:
 
 def list_models(timeout: int = 10) -> set[str]:
     """Models already downloaded on this machine."""
-    resp = requests.get(f"{API}/tags", timeout=timeout)
+    resp = _http.get(f"{API}/tags", timeout=timeout)
     resp.raise_for_status()
     names = {m["name"] for m in resp.json().get("models", [])}
     # "llama3.2" and "llama3.2:latest" are the same model.
@@ -71,8 +76,11 @@ def list_models(timeout: int = 10) -> set[str]:
 
 def pull(model: str, out=sys.stderr) -> None:
     """Download one model, showing progress. Safe to re-run: finished files are skipped."""
-    with requests.post(
-        f"{API}/pull", json={"model": model}, stream=True, timeout=(10, None)
+    with _http.post(
+        f"{API}/pull",
+        json={"model": model},
+        stream=True,
+        timeout=(10, PULL_STALL_SECONDS),
     ) as resp:
         if resp.status_code != 200:
             raise OllamaError(f"{model}: download failed ({resp.status_code}) {resp.text[:200]}")
@@ -104,9 +112,11 @@ def pull_missing(models: list[str], out=sys.stderr) -> list[str]:
 class OllamaClient:
     """Same .chat(model, messages) shape as OpenRouterClient, so the Council doesn't care."""
 
-    def __init__(self, timeout: int = 600, max_tokens: int = 1000):
+    def __init__(self, timeout: int = 600, max_tokens: int = 1000, unload_after: bool = False):
         self.timeout = timeout
         self.max_tokens = max_tokens
+        # Free the model's memory right after it answers, so the next seat's model fits.
+        self.unload_after = unload_after
 
     def chat(self, model: str, messages: list[dict]) -> str:
         payload = {
@@ -115,8 +125,10 @@ class OllamaClient:
             "stream": False,
             "options": {"num_predict": self.max_tokens},
         }
+        if self.unload_after:
+            payload["keep_alive"] = 0
         try:
-            resp = requests.post(f"{API}/chat", json=payload, timeout=self.timeout)
+            resp = _http.post(f"{API}/chat", json=payload, timeout=self.timeout)
             data = resp.json()
         except (requests.RequestException, ValueError) as e:
             raise OllamaError(f"{model}: local request failed: {e}") from None
