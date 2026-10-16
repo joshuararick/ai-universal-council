@@ -1,114 +1,67 @@
-import argparse
-import json
-import os
+﻿import os
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from typing import Dict, Optional
-
 import requests
+from typing import Dict
 
-ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = ROOT / "config" / "council.json"
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
-KEY_NAMES = ("OPENROUTER_API_KEY", "OPENROUTER_KEY")
-
-
-def _read_env_file(path: Path) -> Dict[str, str]:
-    values = {}
-    if not path.is_file():
-        return values
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, _, value = line.partition("=")
-        values[name.strip()] = value.strip().strip('"').strip("'")
-    return values
-
-
-def load_api_key() -> Optional[str]:
-    """Environment first, then project .env, then ~/.secrets/api-keys.env."""
-    sources = [dict(os.environ), _read_env_file(ROOT / ".env"),
-               _read_env_file(Path.home() / ".secrets" / "api-keys.env")]
-    for source in sources:
-        for name in KEY_NAMES:
-            if source.get(name):
-                return source[name]
-    return None
-
+# Force UTF-8 output encoding in Windows terminal
+sys.stdout.reconfigure(encoding='utf-8')
 
 class UniversalCouncil:
-    def __init__(self, roster: str = "default"):
-        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        if roster not in config["rosters"]:
-            raise SystemExit(f"Unknown roster '{roster}'. Choose from: {', '.join(config['rosters'])}")
-        self.models: Dict[str, str] = config["rosters"][roster]
-        self.max_tokens = config.get("max_tokens", 1000)
-        self.timeout = config.get("timeout_seconds", 120)
-        self.api_key = load_api_key()
+    def __init__(self):
+        # Retrieve API key from environment variable
+        self.api_key = os.getenv("OPENROUTER_API_KEY")
+        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
+        
+        # Verified, production-stable OpenRouter model slugs
+        self.models = {
+            "Chief of Staff (Gemini)": "google/gemini-2.0-flash-001",
+            "Lead Engineer (Claude)": "anthropic/claude-3.5-sonnet",
+            "Architect (GPT)": "openai/gpt-4o-mini",
+            "Tactician (Grok)": "x-ai/grok-2"
+        }
 
-    def query_model(self, model_id: str, prompt: str) -> str:
+    def query_model(self, model_name: str, model_id: str, prompt: str) -> str:
         if not self.api_key:
-            return "[SIMULATION] No OpenRouter key found (env, .env, or ~/.secrets/api-keys.env)."
-
+            return "OpenRouter Error: API Key not set in environment variables."
+            
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost:3080",
-            "X-Title": "Joshs Command Center",
+            "HTTP-Referer": "https://localhost:3080",
+            "X-Title": "Joshs Command Center"
         }
+        
         payload = {
             "model": model_id,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": self.max_tokens,
+            "max_tokens": 1500
         }
-
-        for attempt in range(3):
-            try:
-                response = requests.post(API_URL, json=payload, headers=headers, timeout=self.timeout)
-                data = response.json()
-            except (requests.RequestException, ValueError) as e:
-                return f"Request failed: {e}"
-            # Free models are often rate-limited upstream; back off briefly and retry.
-            if response.status_code != 429 or attempt == 2:
-                break
-            time.sleep(5 * (attempt + 1))
-
-        if "error" in data:
-            err = data["error"]
-            hint = " (out of credits: add credits or use --roster free)" if err.get("code") == 402 else ""
-            return f"OpenRouter error {err.get('code')}: {err.get('message')}{hint}"
+        
         try:
-            return (data["choices"][0]["message"]["content"] or "").strip() or "(empty response)"
-        except (KeyError, IndexError, TypeError):
-            return f"Unexpected API response: {data}"
+            response = requests.post(self.api_url, json=payload, headers=headers, timeout=30)
+            res_data = response.json()
+            
+            if "error" in res_data:
+                return f"OpenRouter Error: {res_data['error']}"
+            if "choices" not in res_data:
+                return f"Unexpected API Response: {res_data}"
+                
+            return res_data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error querying {model_name}: {str(e)}"
 
     def convene(self, prompt: str) -> Dict[str, str]:
-        print(f"[Council] Convening AI Universal Council for directive: '{prompt}'\n" + "-" * 50)
-        for name, model_id in self.models.items():
-            print(f"-> Consulting {name} ({model_id})...")
-        with ThreadPoolExecutor(max_workers=len(self.models)) as pool:
-            futures = {name: pool.submit(self.query_model, mid, prompt) for name, mid in self.models.items()}
-            return {name: f.result() for name, f in futures.items()}
-
-
-def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="Ask every council model the same directive.")
-    parser.add_argument("directive", nargs="*", help="Prompt to send (default: readiness check)")
-    parser.add_argument("--roster", default=os.getenv("COUNCIL_ROSTER", "default"),
-                        help="Roster from config/council.json (default, free)")
-    args = parser.parse_args()
-
-    directive = " ".join(args.directive) or "Assess system baseline and provide operational readiness report."
-    council = UniversalCouncil(args.roster)
-    responses = council.convene(directive)
-    print("\n=== COUNCIL RESPONSES ===")
-    for name, answer in responses.items():
-        print(f"\n[{name} - {council.models[name]}]:\n{answer}")
-
+        print(f"[Council] Convening AI Universal Council for directive: '{prompt}'\n" + "-"*50)
+        results = {}
+        for name, mid in self.models.items():
+            print(f"-> Consulting {name} ({mid})...")
+            results[name] = self.query_model(name, mid, prompt)
+        return results
 
 if __name__ == "__main__":
-    main()
+    council = UniversalCouncil()
+    directive = "Assess system baseline and provide operational readiness report."
+    responses = council.convene(directive)
+    print("\n=== COUNCIL RESPONSES ===")
+    for model, ans in responses.items():
+        print(f"\n[{model}]:\n{ans}")

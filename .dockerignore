@@ -1,5 +1,6 @@
-.env
-.git
-__pycache__/
-venv/
-*.log
+# Allow-list: only what the image needs
+*
+!requirements.txt
+!core/
+!config/
+**/__pycache__

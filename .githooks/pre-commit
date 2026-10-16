@@ -1,0 +1,8 @@
+#!/bin/sh
+# Block commits that contain likely API keys. Enable with: git config core.hooksPath .githooks
+pattern='sk-or-v1-[A-Za-z0-9]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{35}|AQ\.[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+if git diff --cached -U0 --no-color | grep '^+' | grep -qE "$pattern"; then
+  echo "pre-commit: possible secret in staged changes - commit blocked." >&2
+  git diff --cached -U0 --no-color | grep '^+' | grep -nE "$pattern" | sed -E 's/(.{12}).*/\1.../' >&2
+  exit 1
+fi
