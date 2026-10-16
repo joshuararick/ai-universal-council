@@ -54,6 +54,17 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges `
   -e OPENROUTER_API_KEY ai-universal-council --roster free "Your question"
 ```
 
+## Scheduled runs on Render
+
+`render.yaml` defines a Render **Cron Job** (no public URL, so nobody else can trigger it or spend
+your credits). It runs daily at 12:00 UTC with the question in `COUNCIL_QUESTION`; read the answers
+under the job's **Runs** page. Deploy: <https://render.com/deploy?repo=https://github.com/joshuararick/ai-universal-council>
+
+- Give Render its **own** OpenRouter key with a spending limit, entered only in Render's form.
+- Change the schedule, roster (`free`/`default`), or question in the dashboard or `render.yaml`.
+- Redeploys only happen after CI (secret scan, audit, tests, model check) passes.
+- Cost: Render bills per second of run time with a $1/month minimum per cron job.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md). The short version:

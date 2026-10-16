@@ -84,7 +84,12 @@ def main(argv=None) -> int:
         client = OpenRouterClient(
             config.api_key, config.timeout_seconds, config.max_tokens
         )
-        question = " ".join(args.question) or input("Ask the Council: ")
+        # Scheduled runs (e.g. Render cron) have no keyboard: take the question from the env.
+        question = " ".join(args.question) or os.getenv("COUNCIL_QUESTION", "")
+        if not question.strip():
+            if not sys.stdin.isatty():
+                raise ValueError("No question given. Pass one as an argument or set COUNCIL_QUESTION.")
+            question = input("Ask the Council: ")
         names = ", ".join(s.name for s in config.members)
         print(f"Convening the {config.roster} council: {names}...\n", file=sys.stderr)
         result = Council(config, client).convene(question)
