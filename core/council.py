@@ -1,6 +1,10 @@
-import os
+﻿import os
+import sys
 import requests
 from typing import Dict
+
+# Force UTF-8 output encoding in Windows terminal
+sys.stdout.reconfigure(encoding='utf-8')
 
 class UniversalCouncil:
     def __init__(self):
@@ -17,7 +21,7 @@ class UniversalCouncil:
 
     def query_model(self, model_name: str, model_id: str, prompt: str) -> str:
         if not self.api_key:
-            return f"⚠️ [SIMULATION] API Key not set. Prompt received for {model_name}: {prompt}"
+            return f"[SIMULATION] API Key not set. Prompt received for {model_name}: {prompt}"
             
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -36,10 +40,10 @@ class UniversalCouncil:
             res_data = response.json()
             return res_data["choices"][0]["message"]["content"]
         except Exception as e:
-            return f"❌ Error querying {model_name}: {str(e)}"
+            return f"Error querying {model_name}: {str(e)}"
 
     def convene(self, prompt: str) -> Dict[str, str]:
-        print(f"🏛️ Convening AI Universal Council for directive: '{prompt}'\n" + "-"*50)
+        print(f"[Council] Convening AI Universal Council for directive: '{prompt}'\n" + "-"*50)
         results = {}
         for name, mid in self.models.items():
             print(f"-> Consulting {name} ({mid})...")
