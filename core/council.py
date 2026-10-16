@@ -12,7 +12,12 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "council.json"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
+MODELS_URL = "https://openrouter.ai/api/v1/models"
 KEY_NAMES = ("OPENROUTER_API_KEY", "OPENROUTER_KEY")
+
+
+def load_config() -> dict:
+    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
 def _read_env_file(path: Path) -> Dict[str, str]:
@@ -41,7 +46,7 @@ def load_api_key() -> Optional[str]:
 
 class UniversalCouncil:
     def __init__(self, roster: str = "default"):
-        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        config = load_config()
         if roster not in config["rosters"]:
             raise SystemExit(f"Unknown roster '{roster}'. Choose from: {', '.join(config['rosters'])}")
         self.models: Dict[str, str] = config["rosters"][roster]
@@ -101,13 +106,43 @@ class UniversalCouncil:
             return {name: f.result() for name, f in futures.items()}
 
 
+def find_missing_models(config: dict, available: set) -> Dict[str, list]:
+    """Return {roster: [model IDs not offered by OpenRouter]} for rosters with gaps."""
+    missing = {}
+    for roster, models in config["rosters"].items():
+        gone = [mid for mid in models.values() if mid not in available]
+        if gone:
+            missing[roster] = gone
+    return missing
+
+
+def check_models() -> int:
+    """Validate every configured model ID against OpenRouter's public list (no key sent, no credits used)."""
+    config = load_config()
+    response = requests.get(MODELS_URL, timeout=30, allow_redirects=False)
+    response.raise_for_status()
+    available = {m["id"] for m in response.json()["data"]}
+    missing = find_missing_models(config, available)
+    for roster, models in config["rosters"].items():
+        for name, mid in models.items():
+            status = "MISSING" if mid in missing.get(roster, []) else "ok"
+            print(f"[{roster}] {name}: {mid} ... {status}")
+    print("All model IDs are live." if not missing else "Some model IDs are not available on OpenRouter.")
+    return 1 if missing else 0
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Ask every council model the same directive.")
     parser.add_argument("directive", nargs="*", help="Prompt to send (default: readiness check)")
     parser.add_argument("--roster", default=os.getenv("COUNCIL_ROSTER", "default"),
                         help="Roster from config/council.json (default, free)")
+    parser.add_argument("--check", action="store_true",
+                        help="Verify every configured model ID exists on OpenRouter, then exit")
     args = parser.parse_args()
+
+    if args.check:
+        sys.exit(check_models())
 
     directive = " ".join(args.directive) or "Assess system baseline and provide operational readiness report."
     council = UniversalCouncil(args.roster)
