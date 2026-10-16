@@ -11,17 +11,17 @@ class UniversalCouncil:
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         
-        # Define our model roster for the Universal Council
+        # Updated with stable OpenRouter model IDs and explicit max_tokens limits (< 4000)
         self.models = {
-            "Chief of Staff (Gemini)": "google/gemini-2.5-pro",
-            "Lead Engineer (Claude)": "anthropic/claude-3.7-sonnet",
-            "Architect (GPT)": "openai/gpt-4o",
-            "Tactician (Grok)": "x-ai/grok-2"
+            "Chief of Staff (Gemini)": "google/gemini-2.0-flash-001",
+            "Lead Engineer (Claude)": "anthropic/claude-3.5-sonnet",
+            "Architect (GPT)": "openai/gpt-4o-mini",
+            "Tactician (Grok)": "x-ai/grok-2-1212"
         }
 
     def query_model(self, model_name: str, model_id: str, prompt: str) -> str:
         if not self.api_key:
-            return f"[SIMULATION] API Key not set. Prompt received for {model_name}: {prompt}"
+            return "[SIMULATION] API Key not set."
             
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -32,12 +32,19 @@ class UniversalCouncil:
         
         payload = {
             "model": model_id,
-            "messages": [{"role": "user", "content": prompt}]
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 1500
         }
         
         try:
             response = requests.post(self.api_url, json=payload, headers=headers, timeout=30)
             res_data = response.json()
+            
+            if "error" in res_data:
+                return f"OpenRouter Error: {res_data['error']}"
+            if "choices" not in res_data:
+                return f"Unexpected API Response: {res_data}"
+                
             return res_data["choices"][0]["message"]["content"]
         except Exception as e:
             return f"Error querying {model_name}: {str(e)}"
