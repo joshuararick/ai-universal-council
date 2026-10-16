@@ -15,7 +15,6 @@ import sys
 
 import requests
 
-from . import config as cfg
 from . import ollama
 from .config import (
     PROVIDERS,
@@ -25,8 +24,9 @@ from .config import (
     load_raw,
     provider_of,
 )
+from .clients import make_client, pick_roster  # noqa: F401  (tests patch these here)
 from .council import Council, validate_question
-from .openrouter import OpenRouterClient, OpenRouterError, list_models
+from .openrouter import OpenRouterError, list_models
 
 
 def find_missing_models(
@@ -90,29 +90,6 @@ def check() -> int:
     return 1 if missing else 0
 
 
-def pick_roster(requested: str | None) -> str:
-    """No roster asked for and no OpenRouter key anywhere -> run locally, no key needed."""
-    if requested:
-        return requested
-    if cfg.load_api_key():
-        return "default"
-    print("No OpenRouter key found - using the local roster (Ollama, no key).", file=sys.stderr)
-    return "local"
-
-
-def make_client(config):
-    if config.provider == "ollama":
-        ollama.ensure_running()
-        models = [config.chair.model, *(s.model for s in config.members)]
-        if set(models) - ollama.list_models():
-            print("Downloading local models (one time, a few GB)...", file=sys.stderr)
-            ollama.pull_missing(models)
-        return ollama.OllamaClient(
-            config.timeout_seconds, config.max_tokens, unload_after=config.max_parallel == 1
-        )
-    return OpenRouterClient(config.api_key, config.timeout_seconds, config.max_tokens)
-
-
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -138,11 +115,19 @@ def main(argv=None) -> int:
     p.add_argument(
         "--verdict-only", action="store_true", help="Hide individual member answers"
     )
+    p.add_argument(
+        "--web", action="store_true", help="Open the Council in your browser"
+    )
     args = p.parse_args(argv)
 
     try:
         if args.check:
             return check()
+        if args.web:
+            from .web import serve
+
+            serve(args.roster)
+            return 0
         config = load_config(pick_roster(args.roster))
         if args.pull:
             if config.provider != "ollama":
@@ -151,8 +136,9 @@ def main(argv=None) -> int:
             print("Local models ready.")
             return 0
         # Scheduled runs (e.g. Render cron) have no keyboard: take the question from the env.
+        # Only prompt when no question was passed at all; a blank one is just rejected below.
         question = " ".join(args.question) or os.getenv("COUNCIL_QUESTION", "")
-        if not question.strip():
+        if not args.question and not question.strip():
             if not sys.stdin.isatty():
                 raise ValueError("No question given. Pass one as an argument or set COUNCIL_QUESTION.")
             question = input("Ask the Council: ")

@@ -3,7 +3,11 @@
 import io
 import re
 import tempfile
+import json
 import threading
+import time
+import urllib.error
+import urllib.request
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
@@ -14,7 +18,7 @@ import requests
 
 from council import __main__ as cli
 from council import config as cfg
-from council import ollama, openrouter
+from council import ollama, openrouter, web
 from council.config import Config, Seat
 from council.council import Council
 from council.openrouter import OpenRouterClient, OpenRouterError
@@ -293,6 +297,7 @@ class TestConfig(unittest.TestCase):
         with (
             mock.patch.object(cfg, "load_api_key", return_value=None),
             mock.patch.object(cli, "make_client") as make,
+            mock.patch("builtins.input", side_effect=AssertionError("must not prompt")),
             redirect_stderr(io.StringIO()),
             redirect_stdout(io.StringIO()),
         ):
@@ -438,6 +443,75 @@ class TestScheduledRun(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIsNone(question)
         self.assertIn("COUNCIL_QUESTION", err)
+
+
+# ------------------------------------------------------------------ web app
+class TestWeb(unittest.TestCase):
+    def setUp(self):
+        self.server = web.ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        self.server.default_roster = "free"
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def call(self, path, body=None, host=None, content_type="application/json"):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Content-Type": content_type},
+        )
+        if host:
+            req.add_unredirected_header("Host", host)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(req, timeout=5) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def test_serves_the_page_and_rosters(self):
+        status, page = self.call("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"AI Universal Council", page)
+        status, info = self.call("/api/info")
+        self.assertIn("local", json.loads(info)["rosters"])
+        self.assertEqual(json.loads(info)["default"], "free")
+
+    def test_ask_runs_the_council_and_reports_each_seat(self):
+        with mock.patch.object(web, "make_client", return_value=FakeClient()):
+            status, body = self.call("/api/ask", {"question": "hi", "roster": "free"})
+            self.assertEqual(status, 200)
+            job_id = json.loads(body)["id"]
+            for _ in range(100):
+                job = json.loads(self.call(f"/api/job/{job_id}")[1])
+                if job["status"] in ("done", "error"):
+                    break
+                time.sleep(0.02)
+        self.assertEqual(job["status"], "done", job.get("error"))
+        self.assertEqual(len(job["opinions"]), len(job["seats"]))
+        self.assertTrue(job["verdict"])
+
+    def test_rejects_blank_questions_and_unknown_rosters(self):
+        self.assertEqual(self.call("/api/ask", {"question": "  "})[0], 400)
+        self.assertEqual(self.call("/api/ask", {"question": "hi", "roster": "nope"})[0], 400)
+
+    def test_other_sites_cannot_drive_it(self):
+        # DNS rebinding (foreign Host) and cross-site form posts (non-JSON) are refused.
+        self.assertEqual(self.call("/api/info", host="evil.example")[0], 403)
+        status, _ = self.call("/api/ask", {"question": "hi"}, content_type="text/plain")
+        self.assertEqual(status, 403)
+
+    def test_failures_show_up_on_the_page(self):
+        with mock.patch.object(web, "make_client", side_effect=ollama.OllamaError("not installed")):
+            job_id = json.loads(self.call("/api/ask", {"question": "hi", "roster": "local"})[1])["id"]
+            for _ in range(100):
+                job = json.loads(self.call(f"/api/job/{job_id}")[1])
+                if job["status"] in ("done", "error"):
+                    break
+                time.sleep(0.02)
+        self.assertEqual(job["status"], "error")
+        self.assertIn("not installed", job["error"])
 
 
 if __name__ == "__main__":

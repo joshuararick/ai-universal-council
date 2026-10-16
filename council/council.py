@@ -65,15 +65,22 @@ class Council:
         except SEAT_ERRORS as e:  # one broken seat must not sink the whole council
             return Opinion(seat, error=str(e))
 
-    def convene(self, question: str) -> Verdict:
+    def convene(self, question: str, on_opinion=None) -> Verdict:
+        """on_opinion(opinion) is called as each member finishes (the web page uses it)."""
         question = validate_question(question, self.config.max_prompt_chars)
+
+        def ask(seat):
+            opinion = self._ask(seat, question)
+            if on_opinion:
+                on_opinion(opinion)
+            return opinion
 
         # Fan out: all members at once, not one after another
         # (unless the roster caps it, e.g. local models sharing one PC's memory).
         workers = self.config.max_parallel or len(self.config.members)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             opinions = list(
-                pool.map(lambda s: self._ask(s, question), self.config.members)
+                pool.map(ask, self.config.members)
             )
 
         answered = [o for o in opinions if o.answer]

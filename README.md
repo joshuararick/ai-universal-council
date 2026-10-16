@@ -12,6 +12,12 @@ question ───┼─> Lead Engineer  ─┼──> Chair ──> VERDICT
        fan-out (parallel)     fan-in (synthesis)
 ```
 
+## Easiest: double-click
+
+Double-click **`Start Council.bat`**. The first time, it sets everything up (press Enter at the
+key prompt to run on your PC with no key). Then the Council opens in your browser: type a
+question, watch the four seats answer, read the verdict. Close the black window to stop it.
+
 ## Quick start (Windows PowerShell)
 
 ```powershell
@@ -55,10 +61,12 @@ CI runs the same check weekly, so you'll find out when a model is retired.
 | `council.toml` | Who sits on the council. Change models here, not in code. |
 | `council/config.py` | Loads the roster and finds your key. |
 | `council/openrouter.py` | The only file that talks to the internet (retries, redaction, no redirects). |
+| `council/web.py`, `web.html` | The browser app (`python -m council --web`): local only, standard library. |
+| `council/clients.py` | Picks the roster and builds the right client (shared by CLI and web). |
 | `council/ollama.py` | Local models: talks only to Ollama on `127.0.0.1`, starts it, downloads models. |
 | `council/council.py` | The brain: fan-out to members, fan-in to the Chair. |
 | `council/__main__.py` | The command line. |
-| `tests/` | 42 offline tests: no network, no key, $0. `python -m unittest` |
+| `tests/` | 47 offline tests: no network, no key, $0. `python -m unittest` |
 
 ## Docker
 
