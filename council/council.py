@@ -4,10 +4,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .config import Config, Seat
+from .ollama import OllamaError
 from .openrouter import OpenRouterError
 
-# The client turns every network/API failure into this, with the key redacted.
-SEAT_ERRORS = (OpenRouterError,)
+# The clients turn every network/API failure into one of these (keys redacted).
+SEAT_ERRORS = (OpenRouterError, OllamaError)
 
 
 @dataclass
@@ -64,8 +65,10 @@ class Council:
                 f"Question too long ({len(question)} > {self.config.max_prompt_chars} chars)."
             )
 
-        # Fan out: all members at once, not one after another.
-        with ThreadPoolExecutor(max_workers=len(self.config.members)) as pool:
+        # Fan out: all members at once, not one after another
+        # (unless the roster caps it, e.g. local models sharing one PC's memory).
+        workers = self.config.max_parallel or len(self.config.members)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             opinions = list(
                 pool.map(lambda s: self._ask(s, question), self.config.members)
             )

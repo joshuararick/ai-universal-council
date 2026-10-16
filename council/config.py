@@ -23,6 +23,8 @@ class Config:
     roster: str
     chair: Seat
     members: list[Seat]
+    provider: str = "openrouter"  # or "ollama": local models, no key
+    max_parallel: int = 0  # 0 = every member at once
     timeout_seconds: int = 120
     max_tokens: int = 1000
     max_prompt_chars: int = 8000
@@ -65,6 +67,13 @@ def load_raw(path: Path = CONFIG_PATH) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
+PROVIDERS = ("openrouter", "ollama")
+
+
+def provider_of(roster: dict) -> str:
+    return roster.get("provider", "openrouter")
+
+
 def all_model_ids(raw: dict) -> dict[str, list[str]]:
     """{roster: [every model ID it uses, chair included]}"""
     return {
@@ -81,13 +90,21 @@ def load_config(roster: str = "default", path: Path = CONFIG_PATH) -> Config:
             f"Unknown roster '{roster}'. Choose from: {', '.join(rosters)}"
         )
     r = rosters[roster]
+    provider = provider_of(r)
+    if provider not in PROVIDERS:
+        raise ConfigError(
+            f"Roster '{roster}' has unknown provider '{provider}'. Use: {', '.join(PROVIDERS)}"
+        )
     settings = raw.get("settings", {})
     return Config(
         roster=roster,
         chair=Seat("Chair", r["chair"]),
         members=[Seat(**m) for m in r["members"]],
-        timeout_seconds=settings.get("timeout_seconds", 120),
+        provider=provider,
+        max_parallel=r.get("max_parallel", 0),
+        # A roster may override a setting (local models on a CPU need longer).
+        timeout_seconds=r.get("timeout_seconds", settings.get("timeout_seconds", 120)),
         max_tokens=settings.get("max_tokens", 1000),
         max_prompt_chars=settings.get("max_prompt_chars", 8000),
-        api_key=load_api_key(),
+        api_key=load_api_key() if provider == "openrouter" else None,
     )
