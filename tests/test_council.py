@@ -13,6 +13,7 @@ import requests
 
 from council import __main__ as cli
 from council import config as cfg
+from council import keys as keys_cli
 from council import openrouter
 from council.config import Config, Seat
 from council.council import Council
@@ -236,6 +237,108 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(cli.main(["hi"]), 1)
         post.assert_not_called()
         self.assertTrue(re.search("No OpenRouter key", err.getvalue()))
+
+
+# ------------------------------------------------------------------ key manager
+FAKE_PROV = "sk-or-v1-PROVISIONING-not-real"
+KEY_INFO = {"hash": "abc123", "name": "friend", "usage": 1.5, "limit": 5, "disabled": False}
+
+
+class TestKeys(unittest.TestCase):
+    def run_keys(self, argv, response=None):
+        """Run `python -m council.keys ARGV` against a mocked network."""
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(keys_cli, "load_api_key", return_value=FAKE_PROV),
+            mock.patch.object(
+                openrouter.requests, "request", return_value=response
+            ) as request,
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
+            code = keys_cli.main(argv)
+        return code, out.getvalue(), err.getvalue(), request
+
+    def test_list_shows_name_hash_spend_and_limit(self):
+        code, out, _, request = self.run_keys(
+            ["list"], fake_response(200, {"data": [KEY_INFO]})
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("friend", out)
+        self.assertIn("abc123", out)
+        self.assertIn("$1.50 of $5.00", out)
+        method, url = request.call_args.args
+        self.assertEqual((method, url), ("GET", "https://openrouter.ai/api/v1/keys"))
+        kwargs = request.call_args.kwargs
+        self.assertIs(kwargs["allow_redirects"], False)
+        self.assertEqual(kwargs["headers"]["Authorization"], f"Bearer {FAKE_PROV}")
+
+    def test_create_sends_name_and_limit_and_shows_secret_once(self):
+        body = {"data": KEY_INFO, "key": "sk-or-v1-NEW"}
+        code, out, _, request = self.run_keys(
+            ["create", "friend", "--limit", "5"], fake_response(201, body)
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(request.call_args.args[0], "POST")
+        self.assertEqual(request.call_args.kwargs["json"], {"name": "friend", "limit": 5.0})
+        self.assertEqual(out.count("sk-or-v1-NEW"), 1)
+
+    def test_limit_none_removes_the_cap(self):
+        _, _, _, request = self.run_keys(
+            ["limit", "abc123", "none"], fake_response(200, {"data": KEY_INFO})
+        )
+        self.assertEqual(request.call_args.args, ("PATCH", "https://openrouter.ai/api/v1/keys/abc123"))
+        self.assertEqual(request.call_args.kwargs["json"], {"limit": None})
+
+    def test_disable_and_enable(self):
+        for command, flag in (("disable", True), ("enable", False)):
+            _, _, _, request = self.run_keys(
+                [command, "abc123"], fake_response(200, {"data": KEY_INFO})
+            )
+            self.assertEqual(request.call_args.kwargs["json"], {"disabled": flag})
+
+    def test_delete_needs_yes_and_sends_nothing_without_it(self):
+        code, _, err, request = self.run_keys(["delete", "abc123"])
+        self.assertEqual(code, 1)
+        self.assertIn("--yes", err)
+        request.assert_not_called()
+
+    def test_delete_with_yes(self):
+        code, _, _, request = self.run_keys(
+            ["delete", "abc123", "--yes"], fake_response(200, {"data": {"success": True}})
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(request.call_args.args[0], "DELETE")
+
+    def test_bad_hash_never_reaches_the_url(self):
+        code, _, err, request = self.run_keys(["disable", "../../credits"])
+        self.assertEqual(code, 1)
+        self.assertIn("Not a key hash", err)
+        request.assert_not_called()
+
+    def test_provisioning_key_is_redacted_from_errors(self):
+        body = {"error": {"code": 401, "message": f"bad key {FAKE_PROV}"}}
+        code, _, err, _ = self.run_keys(["list"], fake_response(401, body))
+        self.assertEqual(code, 1)
+        self.assertNotIn(FAKE_PROV, err)
+        self.assertIn("[REDACTED]", err)
+
+    def test_no_provisioning_key_is_a_clean_error(self):
+        err = io.StringIO()
+        with (
+            mock.patch.object(keys_cli, "load_api_key", return_value=None),
+            mock.patch.object(openrouter.requests, "request") as request,
+            redirect_stderr(err),
+        ):
+            self.assertEqual(keys_cli.main(["list"]), 1)
+        request.assert_not_called()
+        self.assertIn("OPENROUTER_PROVISIONING_KEY", err.getvalue())
+
+    def test_chat_key_is_never_used_as_the_provisioning_key(self):
+        with mock.patch.dict(
+            "os.environ", {"OPENROUTER_API_KEY": "chat-key"}, clear=True
+        ), mock.patch.object(cfg, "read_env_file", return_value={}):
+            self.assertIsNone(cfg.load_api_key(cfg.PROVISIONING_KEY_NAMES))
 
 
 if __name__ == "__main__":

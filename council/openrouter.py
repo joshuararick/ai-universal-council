@@ -79,3 +79,68 @@ class OpenRouterClient:
         if not text:
             raise OpenRouterError(f"{model}: empty response")
         return text
+
+
+class KeyManager:
+    """Create, list, limit and revoke API keys with an OpenRouter *provisioning* key."""
+
+    def __init__(self, provisioning_key: str | None, timeout: int = 30):
+        if not provisioning_key:
+            raise OpenRouterError(
+                "No provisioning key found. Make one at openrouter.ai (Settings > "
+                "Provisioning API Keys) and put OPENROUTER_PROVISIONING_KEY in .env."
+            )
+        self._key = provisioning_key
+        self._headers = {
+            "Authorization": f"Bearer {provisioning_key}",
+            "Content-Type": "application/json",
+        }
+        self.timeout = timeout
+
+    def _call(self, method: str, path: str, body: dict | None = None) -> dict:
+        try:
+            # No redirects: a redirect must never carry the Authorization header elsewhere.
+            resp = requests.request(
+                method,
+                f"{API}/keys{path}",
+                json=body,
+                headers=self._headers,
+                timeout=self.timeout,
+                allow_redirects=False,
+            )
+            data = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            raise OpenRouterError(
+                f"keys: request failed: {e}".replace(self._key, "[REDACTED]")
+            ) from None
+        if resp.status_code not in (200, 201) or "error" in data:
+            err = data.get("error", {}) if isinstance(data, dict) else {}
+            code = err.get("code", resp.status_code)
+            msg = f"keys: OpenRouter error {code}: {err.get('message', str(data)[:300])}"
+            raise OpenRouterError(msg.replace(self._key, "[REDACTED]"))
+        return data
+
+    def list(self) -> list[dict]:
+        return self._call("GET", "")["data"]
+
+    def create(self, name: str, limit: float | None = None) -> tuple[dict, str]:
+        """Returns (key info, the secret). OpenRouter shows the secret only this once."""
+        body = {"name": name}
+        if limit is not None:
+            body["limit"] = limit
+        data = self._call("POST", "", body)
+        return data["data"], data["key"]
+
+    def update(self, key_hash: str, **changes) -> dict:
+        """changes: any of name=, limit=, disabled=."""
+        return self._call("PATCH", f"/{_checked(key_hash)}", changes)["data"]
+
+    def delete(self, key_hash: str) -> None:
+        self._call("DELETE", f"/{_checked(key_hash)}")
+
+
+def _checked(key_hash: str) -> str:
+    """A key hash goes into the URL path, so allow only plain letters and digits."""
+    if not key_hash.isascii() or not key_hash.isalnum():
+        raise OpenRouterError(f"Not a key hash: {key_hash!r} (see `keys list`)")
+    return key_hash

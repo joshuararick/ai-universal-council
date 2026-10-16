@@ -35,16 +35,31 @@ Edit `council.toml` (rosters, chair, roles, `max_tokens`, timeout), then verify:
 
 CI runs the same check weekly, so you'll find out when a model is retired.
 
+## Manage API keys (yours and other people's)
+
+An OpenRouter **provisioning key** can make and manage ordinary API keys, but can't call
+models itself. Create one at openrouter.ai → Settings → Provisioning API Keys and put it
+in `.env` as `OPENROUTER_PROVISIONING_KEY` (kept separate from `OPENROUTER_API_KEY`).
+
+```powershell
+python -m council.keys list                       # every key: name, hash, spend, limit
+python -m council.keys create "friend" --limit 5  # new key capped at $5; secret shown ONCE
+python -m council.keys limit HASH 10              # change a cap ("none" removes it)
+python -m council.keys disable HASH               # switch off (enable turns it back on)
+python -m council.keys delete HASH --yes          # revoke for good
+```
+
 ## Files: one job each
 
 | File | Job |
 |---|---|
 | `council.toml` | Who sits on the council. Change models here, not in code. |
 | `council/config.py` | Loads the roster and finds your key. |
-| `council/openrouter.py` | The **only** file that touches the network (retries, redaction, no redirects). |
+| `council/openrouter.py` | The **only** file that touches the network (chat + key management; retries, redaction, no redirects). |
 | `council/council.py` | The brain: fan-out to members, fan-in to the Chair. |
 | `council/__main__.py` | The command line. |
-| `tests/` | 22 offline tests: no network, no key, $0. `python -m unittest` |
+| `council/keys.py` | Key manager command line (`python -m council.keys`). |
+| `tests/` | 32 offline tests: no network, no key, $0. `python -m unittest` |
 
 ## Docker
 

@@ -9,6 +9,8 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "council.toml"
 KEY_NAMES = ("OPENROUTER_API_KEY", "OPENROUTER_KEY")
+# Manages other keys; can't call models. Kept separate so a leaked chat key can't mint more.
+PROVISIONING_KEY_NAMES = ("OPENROUTER_PROVISIONING_KEY",)
 
 
 @dataclass
@@ -47,7 +49,7 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def load_api_key() -> str | None:
+def load_api_key(names: tuple[str, ...] = KEY_NAMES) -> str | None:
     """Environment first, then project .env, then ~/.secrets/api-keys.env."""
     sources = [
         dict(os.environ),
@@ -55,7 +57,7 @@ def load_api_key() -> str | None:
         read_env_file(Path.home() / ".secrets" / "api-keys.env"),
     ]
     for source in sources:
-        for name in KEY_NAMES:
+        for name in names:
             if source.get(name):
                 return source[name]
     return None
