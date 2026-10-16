@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Universal Council</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #ffffff; --ink: #1d1d1b; --muted: #6b6a65; --line: #e3e1da;
+    --accent: #c2410c; --accent-ink: #ffffff; --ok: #15803d; --bad: #b91c1c; --verdict: #fff7ed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --card: #1f1f1d; --ink: #f2f1ec; --muted: #a3a29b; --line: #34332f;
+      --accent: #f97316; --accent-ink: #141413; --ok: #4ade80; --bad: #f87171; --verdict: #2a1d12;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
+  header h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
+  header p { margin: 4px 0 24px; color: var(--muted); }
+  form { display: grid; gap: 10px; }
+  textarea { width: 100%; min-height: 96px; padding: 14px; font: inherit; color: var(--ink);
+             background: var(--card); border: 1px solid var(--line); border-radius: 12px; resize: vertical; }
+  textarea:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select { padding: 10px 12px; font: inherit; color: var(--ink); background: var(--card);
+           border: 1px solid var(--line); border-radius: 10px; }
+  button { padding: 11px 22px; font: inherit; font-weight: 600; color: var(--accent-ink);
+           background: var(--accent); border: 0; border-radius: 10px; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: wait; }
+  #status { color: var(--muted); font-size: 14px; min-height: 1.5em; margin: 18px 0 8px; }
+  #status.error { color: var(--bad); white-space: pre-wrap; }
+  .seats { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; min-width: 0; }
+  .card h2 { margin: 0; font-size: 16px; }
+  .card .model { color: var(--muted); font-size: 12px; font-family: ui-monospace, Consolas, monospace;
+                 overflow-wrap: anywhere; }
+  .card .body { margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px;
+                max-height: 340px; overflow: auto; }
+  .card.waiting .body { color: var(--muted); animation: pulse 1.6s ease-in-out infinite; }
+  .card.failed .body { color: var(--bad); }
+  @keyframes pulse { 50% { opacity: .4; } }
+  #verdict { margin-top: 18px; background: var(--verdict); border-color: var(--accent); }
+  #verdict h2 { font-size: 18px; color: var(--accent); }
+  #verdict .body { max-height: none; font-size: 15px; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { .card.waiting .body { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🏛️ AI Universal Council</h1>
+    <p>Ask one question. Four AI models answer from different seats, then the Chair writes one verdict.</p>
+  </header>
+
+  <form id="ask">
+    <label for="q" hidden>Your question</label>
+    <textarea id="q" placeholder="What should I build next?" required></textarea>
+    <div class="row">
+      <label for="roster">Council:</label>
+      <select id="roster"></select>
+      <button id="go" type="submit">Ask the Council</button>
+    </div>
+  </form>
+
+  <div id="status" role="status" aria-live="polite"></div>
+  <section class="seats" id="seats"></section>
+  <section class="card" id="verdict" hidden>
+    <h2>Council verdict</h2>
+    <div class="body" id="verdict-body"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LABELS = {
+  default: "Cloud (paid, needs OpenRouter key)",
+  free: "Cloud (free models, needs OpenRouter key)",
+  local: "On this PC (no key, Ollama)",
+};
+const STATUS = {
+  starting: "Starting…",
+  preparing: "Getting the models ready. The first time on this PC this downloads a few GB and can take a while…",
+  asking: "The council is thinking. Local models take turns, so this can take a few minutes…",
+};
+
+// Model text is untrusted: build nodes (never innerHTML). Supports **bold** and "# " headings.
+function fill(el, text) {
+  el.replaceChildren();
+  for (const line of text.split("\n")) {
+    const heading = line.match(/^#{1,6}\s+(.*)/);
+    const parts = (heading ? heading[1] : line).split(/\*\*(.+?)\*\*/);
+    parts.forEach((part, i) => {
+      if (!part) return;
+      if (i % 2 || heading) {
+        const b = document.createElement("strong"); b.textContent = part; el.append(b);
+      } else {
+        el.append(part);
+      }
+    });
+    el.append("\n");
+  }
+}
+
+function setStatus(text, isError) {
+  $("status").textContent = text;
+  $("status").className = isError ? "error" : "";
+}
+
+function card(name) {
+  const el = document.createElement("article");
+  el.className = "card waiting";
+  const h = document.createElement("h2"); h.textContent = name;
+  const m = document.createElement("div"); m.className = "model";
+  const b = document.createElement("div"); b.className = "body"; b.textContent = "Thinking…";
+  el.append(h, m, b);
+  return el;
+}
+
+function render(job) {
+  const seats = $("seats");
+  if (seats.children.length !== job.seats.length) {
+    seats.replaceChildren(...job.seats.map(card));
+  }
+  for (const o of job.opinions) {
+    const i = job.seats.indexOf(o.name);
+    const el = seats.children[i];
+    if (!el) continue;
+    el.className = o.answer ? "card" : "card failed";
+    el.querySelector(".model").textContent = o.model;
+    fill(el.querySelector(".body"), o.answer || ("Couldn't answer: " + o.error));
+  }
+  if (job.verdict) {
+    fill($("verdict-body"), job.verdict);
+    $("verdict").hidden = false;
+  }
+}
+
+async function poll(id) {
+  while (true) {
+    const job = await (await fetch("/api/job/" + id)).json();
+    render(job);
+    if (job.status === "done") return setStatus("");
+    if (job.status === "error") return setStatus(job.error, true);
+    setStatus(STATUS[job.status] || "Working…");
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
+$("ask").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("go").disabled = true;
+  $("seats").replaceChildren();
+  $("verdict").hidden = true;
+  setStatus("Starting…");
+  try {
+    const resp = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: $("q").value, roster: $("roster").value }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error);
+    await poll(data.id);
+  } catch (err) {
+    setStatus(String(err.message || err), true);
+  } finally {
+    $("go").disabled = false;
+  }
+});
+
+(async () => {
+  const info = await (await fetch("/api/info")).json();
+  for (const r of info.rosters) {
+    const opt = document.createElement("option");
+    opt.value = r; opt.textContent = LABELS[r] || r;
+    opt.selected = r === info.default;
+    $("roster").append(opt);
+  }
+  $("q").focus();
+})();
+</script>
+</body>
+</html>

@@ -12,6 +12,12 @@ question ───┼─> Lead Engineer  ─┼──> Chair ──> VERDICT
        fan-out (parallel)     fan-in (synthesis)
 ```
 
+## Easiest: double-click
+
+Double-click **`Start Council.bat`**. The first time, it sets everything up (press Enter at the
+key prompt to run on your PC with no key). Then the Council opens in your browser: type a
+question, watch the four seats answer, read the verdict. Close the black window to stop it.
+
 ## Quick start (Windows PowerShell)
 
 ```powershell
@@ -22,6 +28,19 @@ cd ai-universal-council
 .\run.ps1 -Roster free "Your question"   # free models (rate-limited, no credits needed)
 .\run.ps1 --verdict-only "Your question" # just the verdict
 ```
+
+### No key? Run it locally
+
+```powershell
+.\setup.ps1 -Local                            # installs Ollama, downloads ~10 GB of models once
+.\run.ps1 -Roster local "Your question"       # runs on your PC: no key, no account, $0
+```
+
+Four models from four companies (Google Gemma, Alibaba Qwen, Microsoft Phi, Meta Llama) sit
+on the council, all running on your machine through [Ollama](https://ollama.com). The app starts
+Ollama if it isn't running and downloads any missing model on first use. With no `-Roster` and
+no OpenRouter key anywhere, it picks the local roster by itself. Local models are smaller than
+cloud ones, so answers are slower (they take turns, one in memory at a time) and simpler.
 
 The key is looked up in this order: `OPENROUTER_API_KEY` env var → project `.env` → `~/.secrets/api-keys.env`.
 
@@ -41,10 +60,13 @@ CI runs the same check weekly, so you'll find out when a model is retired.
 |---|---|
 | `council.toml` | Who sits on the council. Change models here, not in code. |
 | `council/config.py` | Loads the roster and finds your key. |
-| `council/openrouter.py` | The **only** file that touches the network (retries, redaction, no redirects). |
+| `council/openrouter.py` | The only file that talks to the internet (retries, redaction, no redirects). |
+| `council/web.py`, `web.html` | The browser app (`python -m council --web`): local only, standard library. |
+| `council/clients.py` | Picks the roster and builds the right client (shared by CLI and web). |
+| `council/ollama.py` | Local models: talks only to Ollama on `127.0.0.1`, starts it, downloads models. |
 | `council/council.py` | The brain: fan-out to members, fan-in to the Chair. |
 | `council/__main__.py` | The command line. |
-| `tests/` | 22 offline tests: no network, no key, $0. `python -m unittest` |
+| `tests/` | 47 offline tests: no network, no key, $0. `python -m unittest` |
 
 ## Docker
 
