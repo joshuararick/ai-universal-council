@@ -19,6 +19,7 @@ services:
       - key: COUNCIL_QUESTION
         value: >-
           Give a short daily briefing for a solo developer building AI tools:
-          one important development in AI models or tooling worth knowing today,
-          one security practice to apply, and one concrete improvement to try
-          in a small multi-model Python CLI.
+          one practical technique or tool worth trying, one security practice
+          to apply, and one concrete improvement to try in a small multi-model
+          Python CLI. You have no live internet access, so do not present
+          anything as recent news or give release dates.
