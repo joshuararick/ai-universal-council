@@ -4,6 +4,8 @@
 #   .\run.ps1 -Roster local "question"     (models on this PC via Ollama, no key at all)
 #   .\run.ps1 --check                      (verify model IDs, no key needed)
 # No -Roster and no OpenRouter key? It runs locally automatically.
+# PositionalBinding off: a bare question must never be taken as the -Roster value.
+[CmdletBinding(PositionalBinding = $false)]
 param([string]$Roster = "", [Parameter(ValueFromRemainingArguments)][string[]]$Rest)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"

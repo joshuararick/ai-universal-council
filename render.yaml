@@ -1,0 +1,25 @@
+# Render Blueprint: runs the Council on a schedule as a Cron Job (no public URL).
+# Deploy: https://render.com/deploy?repo=https://github.com/joshuararick/ai-universal-council
+# Answers appear in the Render dashboard under the job's "Runs" -> logs.
+services:
+  - type: cron
+    name: ai-universal-council
+    runtime: docker
+    repo: https://github.com/joshuararick/ai-universal-council
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    schedule: "0 12 * * *"            # daily 12:00 UTC (8 AM Eastern in summer, 7 AM in winter)
+    autoDeployTrigger: checksPass     # only redeploy after the security/test CI passes
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false                   # entered in the Render form; never stored in this repo
+      - key: COUNCIL_ROSTER
+        value: free                   # switch to "default" once the OpenRouter account has credits
+      - key: COUNCIL_QUESTION
+        value: >-
+          Give a short daily briefing for a solo developer building AI tools:
+          one practical technique or tool worth trying, one security practice
+          to apply, and one concrete improvement to try in a small multi-model
+          Python CLI. You have no live internet access, so do not present
+          anything as recent news or give release dates.

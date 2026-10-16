@@ -58,7 +58,7 @@ CI runs the same check weekly, so you'll find out when a model is retired.
 | `council/ollama.py` | Local models: talks only to Ollama on `127.0.0.1`, starts it, downloads models. |
 | `council/council.py` | The brain: fan-out to members, fan-in to the Chair. |
 | `council/__main__.py` | The command line. |
-| `tests/` | 39 offline tests: no network, no key, $0. `python -m unittest` |
+| `tests/` | 42 offline tests: no network, no key, $0. `python -m unittest` |
 
 ## Docker
 
@@ -67,6 +67,17 @@ docker build -t ai-universal-council .
 docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges `
   -e OPENROUTER_API_KEY ai-universal-council --roster free "Your question"
 ```
+
+## Scheduled runs on Render
+
+`render.yaml` defines a Render **Cron Job** (no public URL, so nobody else can trigger it or spend
+your credits). It runs daily at 12:00 UTC with the question in `COUNCIL_QUESTION`; read the answers
+under the job's **Runs** page. Deploy: <https://render.com/deploy?repo=https://github.com/joshuararick/ai-universal-council>
+
+- Give Render its **own** OpenRouter key with a spending limit, entered only in Render's form.
+- Change the schedule, roster (`free`/`default`), or question in the dashboard or `render.yaml`.
+- Redeploys only happen after CI (secret scan, audit, tests, model check) passes.
+- Cost: Render bills per second of run time with a $1/month minimum per cron job.
 
 ## Security
 

@@ -15,12 +15,12 @@ import sys
 
 import requests
 
+from . import config as cfg
 from . import ollama
 from .config import (
     PROVIDERS,
     ConfigError,
     all_model_ids,
-    load_api_key,
     load_config,
     load_raw,
     provider_of,
@@ -94,7 +94,7 @@ def pick_roster(requested: str | None) -> str:
     """No roster asked for and no OpenRouter key anywhere -> run locally, no key needed."""
     if requested:
         return requested
-    if load_api_key():
+    if cfg.load_api_key():
         return "default"
     print("No OpenRouter key found - using the local roster (Ollama, no key).", file=sys.stderr)
     return "local"
@@ -150,10 +150,14 @@ def main(argv=None) -> int:
             make_client(config)  # starts Ollama and downloads anything missing
             print("Local models ready.")
             return 0
+        # Scheduled runs (e.g. Render cron) have no keyboard: take the question from the env.
+        question = " ".join(args.question) or os.getenv("COUNCIL_QUESTION", "")
+        if not question.strip():
+            if not sys.stdin.isatty():
+                raise ValueError("No question given. Pass one as an argument or set COUNCIL_QUESTION.")
+            question = input("Ask the Council: ")
         # Check the question first: a bad one must not trigger a multi-GB download.
-        question = validate_question(
-            " ".join(args.question) or input("Ask the Council: "), config.max_prompt_chars
-        )
+        question = validate_question(question, config.max_prompt_chars)
         client = make_client(config)
         names = ", ".join(s.name for s in config.members)
         print(f"Convening the {config.roster} council: {names}...\n", file=sys.stderr)

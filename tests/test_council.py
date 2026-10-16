@@ -291,7 +291,7 @@ class TestConfig(unittest.TestCase):
 
     def test_bad_question_is_rejected_before_any_download(self):
         with (
-            mock.patch.object(cli, "load_api_key", return_value=None),
+            mock.patch.object(cfg, "load_api_key", return_value=None),
             mock.patch.object(cli, "make_client") as make,
             redirect_stderr(io.StringIO()),
             redirect_stdout(io.StringIO()),
@@ -301,11 +301,11 @@ class TestConfig(unittest.TestCase):
 
     def test_no_key_and_no_roster_falls_back_to_local(self):
         with (
-            mock.patch.object(cli, "load_api_key", return_value=None),
+            mock.patch.object(cfg, "load_api_key", return_value=None),
             redirect_stderr(io.StringIO()),
         ):
             self.assertEqual(cli.pick_roster(None), "local")
-        with mock.patch.object(cli, "load_api_key", return_value=FAKE_KEY):
+        with mock.patch.object(cfg, "load_api_key", return_value=FAKE_KEY):
             self.assertEqual(cli.pick_roster(None), "default")
         self.assertEqual(cli.pick_roster("free"), "free")  # an explicit choice always wins
 
@@ -401,6 +401,43 @@ class TestOllama(unittest.TestCase):
         with mock.patch("council.council.ThreadPoolExecutor", wraps=ThreadPoolExecutor) as pool:
             Council(config, FakeClient()).convene("hi")
         self.assertEqual(pool.call_args.kwargs["max_workers"], 1)
+
+
+# ------------------------------------------------------------------ scheduled (cron) runs
+class TestScheduledRun(unittest.TestCase):
+    def run_cli(self, env, argv=()):
+        out, err = io.StringIO(), io.StringIO()
+        seen = {}
+
+        def fake_convene(council, question):
+            seen["question"] = question
+            return mock.Mock(opinions=[], verdict="ok")
+
+        with (
+            mock.patch.dict("os.environ", env, clear=False),
+            mock.patch.object(cfg, "load_api_key", return_value=FAKE_KEY),
+            mock.patch.object(cli.Council, "convene", fake_convene),
+            mock.patch.object(cli.sys.stdin, "isatty", return_value=False),
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
+            code = cli.main(list(argv))
+        return code, seen.get("question"), err.getvalue()
+
+    def test_question_comes_from_env(self):
+        code, question, _ = self.run_cli({"COUNCIL_QUESTION": "daily report"})
+        self.assertEqual((code, question), (0, "daily report"))
+
+    def test_argument_beats_env(self):
+        _, question, _ = self.run_cli({"COUNCIL_QUESTION": "env q"}, ["arg", "q"])
+        self.assertEqual(question, "arg q")
+
+    def test_no_question_without_keyboard_fails_instead_of_hanging(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("must not prompt")):
+            code, question, err = self.run_cli({"COUNCIL_QUESTION": ""})
+        self.assertEqual(code, 1)
+        self.assertIsNone(question)
+        self.assertIn("COUNCIL_QUESTION", err)
 
 
 if __name__ == "__main__":
