@@ -3,8 +3,13 @@
 import io
 import re
 import tempfile
+import json
 import threading
+import time
+import urllib.error
+import urllib.request
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -13,7 +18,7 @@ import requests
 
 from council import __main__ as cli
 from council import config as cfg
-from council import openrouter
+from council import ollama, openrouter, web
 from council.config import Config, Seat
 from council.council import Council
 from council.openrouter import OpenRouterClient, OpenRouterError
@@ -179,10 +184,36 @@ class TestConfig(unittest.TestCase):
     def test_rosters_are_well_formed(self):
         raw = cfg.load_raw()
         self.assertIn("default", raw["rosters"])
+        self.assertIn("local", raw["rosters"])
+        id_format = {
+            "openrouter": r"^[a-z0-9-]+/[A-Za-z0-9._:-]+$",  # vendor/model
+            "ollama": r"^[a-z0-9._-]+(:[A-Za-z0-9._-]+)?$",  # model:tag
+        }
         for roster, ids in cfg.all_model_ids(raw).items():
+            provider = cfg.provider_of(raw["rosters"][roster])
+            self.assertIn(provider, cfg.PROVIDERS, roster)
             self.assertGreaterEqual(len(ids), 3, roster)
             for mid in ids:
-                self.assertRegex(mid, r"^[a-z0-9-]+/[A-Za-z0-9._:-]+$", roster)
+                self.assertRegex(mid, id_format[provider], roster)
+
+    def test_local_roster_needs_no_key(self):
+        with mock.patch.object(cfg, "load_api_key", return_value=FAKE_KEY):
+            c = cfg.load_config("local")
+        self.assertEqual(c.provider, "ollama")
+        self.assertIsNone(c.api_key)  # the OpenRouter key never goes near localhost
+        self.assertEqual(c.max_parallel, 1)
+        self.assertGreater(c.timeout_seconds, 120)
+
+    def test_unknown_provider_is_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "c.toml"
+            path.write_text(
+                '[rosters.x]\nprovider = "nope"\nchair = "a"\n'
+                '[[rosters.x.members]]\nname = "A"\nmodel = "a"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(cfg.ConfigError, "unknown provider"):
+                cfg.load_config("x", path)
 
     def test_every_roster_loads_without_leaking_key(self):
         with mock.patch.object(cfg, "load_api_key", return_value=FAKE_KEY):
@@ -238,6 +269,145 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(re.search("No OpenRouter key", err.getvalue()))
 
 
+    def test_check_ignores_local_rosters_when_ollama_is_absent(self):
+        live = {m for r, ids in cfg.all_model_ids(cfg.load_raw()).items() if r != "local" for m in ids}
+        out = io.StringIO()
+        with (
+            mock.patch.object(cli, "list_models", return_value=live),
+            mock.patch.object(ollama, "is_running", return_value=False),
+            redirect_stdout(out),
+        ):
+            self.assertEqual(cli.main(["--check"]), 0)
+        self.assertIn("Ollama not running", out.getvalue())
+
+    def test_check_rejects_unknown_provider(self):
+        raw = {"rosters": {"x": {"provider": "olama", "chair": "a", "members": []}}}
+        err = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_raw", return_value=raw),
+            mock.patch.object(cli, "list_models") as remote,
+            redirect_stderr(err),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(cli.main(["--check"]), 1)
+        remote.assert_not_called()
+        self.assertIn("unknown provider", err.getvalue())
+
+    def test_bad_question_is_rejected_before_any_download(self):
+        with (
+            mock.patch.object(cfg, "load_api_key", return_value=None),
+            mock.patch.object(cli, "make_client") as make,
+            mock.patch("builtins.input", side_effect=AssertionError("must not prompt")),
+            redirect_stderr(io.StringIO()),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(cli.main(["--roster", "local", "   "]), 1)
+        make.assert_not_called()
+
+    def test_no_key_and_no_roster_falls_back_to_local(self):
+        with (
+            mock.patch.object(cfg, "load_api_key", return_value=None),
+            redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(cli.pick_roster(None), "local")
+        with mock.patch.object(cfg, "load_api_key", return_value=FAKE_KEY):
+            self.assertEqual(cli.pick_roster(None), "default")
+        self.assertEqual(cli.pick_roster("free"), "free")  # an explicit choice always wins
+
+
+# ------------------------------------------------------------------ Ollama (local) client
+class TestOllama(unittest.TestCase):
+    unload = False
+
+    def chat_with(self, **post_kwargs):
+        client = ollama.OllamaClient(timeout=5, max_tokens=50, unload_after=self.unload)
+        with mock.patch.object(ollama._http, "post", **post_kwargs) as post:
+            try:
+                return client.chat("m:1b", [{"role": "user", "content": "p"}]), post
+            except ollama.OllamaError as e:
+                return e, post
+
+    def test_talks_only_to_localhost_without_a_key(self):
+        out, post = self.chat_with(
+            return_value=fake_response(200, {"message": {"content": " hi "}})
+        )
+        self.assertEqual(out, "hi")
+        args, kwargs = post.call_args
+        self.assertTrue(args[0].startswith("http://127.0.0.1:11434/"))
+        self.assertNotIn("headers", kwargs)
+        self.assertIs(kwargs["json"]["stream"], False)
+        self.assertEqual(kwargs["json"]["options"]["num_predict"], 50)
+
+    def test_never_uses_proxy_settings_for_localhost(self):
+        self.assertIs(ollama._http.trust_env, False)
+
+    def test_unload_after_answering_when_asked(self):
+        self.unload = True
+        _, post = self.chat_with(return_value=fake_response(200, {"message": {"content": "x"}}))
+        self.assertEqual(post.call_args.kwargs["json"]["keep_alive"], 0)
+        self.unload = False
+        _, post = self.chat_with(return_value=fake_response(200, {"message": {"content": "x"}}))
+        self.assertNotIn("keep_alive", post.call_args.kwargs["json"])
+
+    def test_pull_has_a_finite_stall_timeout(self):
+        resp = mock.MagicMock(status_code=200)
+        resp.__enter__.return_value = resp
+        resp.iter_lines.return_value = [b'{"status":"success"}']
+        with mock.patch.object(ollama._http, "post", return_value=resp) as post:
+            ollama.pull("m:1b", out=io.StringIO())
+        connect, read = post.call_args.kwargs["timeout"]
+        self.assertIsNotNone(read)
+
+    def test_strips_thinking(self):
+        body = {"message": {"content": "<think>\nhmm\n</think>\n\nAnswer."}}
+        out, _ = self.chat_with(return_value=fake_response(200, body))
+        self.assertEqual(out, "Answer.")
+
+    def test_missing_model_says_how_to_pull(self):
+        body = {"error": "model 'm:1b' not found"}
+        err, _ = self.chat_with(return_value=fake_response(404, body))
+        self.assertIsInstance(err, ollama.OllamaError)
+        self.assertIn("--pull", str(err))
+
+    def test_connection_failure_is_a_seat_error(self):
+        err, _ = self.chat_with(side_effect=requests.ConnectionError("refused"))
+        self.assertIsInstance(err, ollama.OllamaError)
+
+    def test_not_installed_says_how_to_install(self):
+        with (
+            mock.patch.object(ollama, "is_running", return_value=False),
+            mock.patch.object(ollama.shutil, "which", return_value=None),
+            self.assertRaisesRegex(ollama.OllamaError, "ollama.com"),
+        ):
+            ollama.ensure_running()
+
+    def test_starts_ollama_when_installed_but_stopped(self):
+        with (
+            mock.patch.object(ollama, "is_running", side_effect=[False, False, True]),
+            mock.patch.object(ollama.shutil, "which", return_value="/usr/bin/ollama"),
+            mock.patch.object(ollama.subprocess, "Popen") as popen,
+            mock.patch.object(ollama.time, "sleep"),
+        ):
+            ollama.ensure_running()
+        self.assertEqual(popen.call_args[0][0], ["/usr/bin/ollama", "serve"])
+
+    def test_pull_missing_skips_models_already_here(self):
+        with (
+            mock.patch.object(ollama, "list_models", return_value={"a:1b"}),
+            mock.patch.object(ollama, "pull") as pull,
+        ):
+            pulled = ollama.pull_missing(["a:1b", "b:2b", "b:2b"])
+        self.assertEqual(pulled, ["b:2b"])
+        pull.assert_called_once()
+
+    def test_max_parallel_caps_the_fan_out(self):
+        config = make_config()
+        config.max_parallel = 1
+        with mock.patch("council.council.ThreadPoolExecutor", wraps=ThreadPoolExecutor) as pool:
+            Council(config, FakeClient()).convene("hi")
+        self.assertEqual(pool.call_args.kwargs["max_workers"], 1)
+
+
 # ------------------------------------------------------------------ scheduled (cron) runs
 class TestScheduledRun(unittest.TestCase):
     def run_cli(self, env, argv=()):
@@ -273,6 +443,75 @@ class TestScheduledRun(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIsNone(question)
         self.assertIn("COUNCIL_QUESTION", err)
+
+
+# ------------------------------------------------------------------ web app
+class TestWeb(unittest.TestCase):
+    def setUp(self):
+        self.server = web.ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        self.server.default_roster = "free"
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def call(self, path, body=None, host=None, content_type="application/json"):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Content-Type": content_type},
+        )
+        if host:
+            req.add_unredirected_header("Host", host)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(req, timeout=5) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def test_serves_the_page_and_rosters(self):
+        status, page = self.call("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"AI Universal Council", page)
+        status, info = self.call("/api/info")
+        self.assertIn("local", json.loads(info)["rosters"])
+        self.assertEqual(json.loads(info)["default"], "free")
+
+    def test_ask_runs_the_council_and_reports_each_seat(self):
+        with mock.patch.object(web, "make_client", return_value=FakeClient()):
+            status, body = self.call("/api/ask", {"question": "hi", "roster": "free"})
+            self.assertEqual(status, 200)
+            job_id = json.loads(body)["id"]
+            for _ in range(100):
+                job = json.loads(self.call(f"/api/job/{job_id}")[1])
+                if job["status"] in ("done", "error"):
+                    break
+                time.sleep(0.02)
+        self.assertEqual(job["status"], "done", job.get("error"))
+        self.assertEqual(len(job["opinions"]), len(job["seats"]))
+        self.assertTrue(job["verdict"])
+
+    def test_rejects_blank_questions_and_unknown_rosters(self):
+        self.assertEqual(self.call("/api/ask", {"question": "  "})[0], 400)
+        self.assertEqual(self.call("/api/ask", {"question": "hi", "roster": "nope"})[0], 400)
+
+    def test_other_sites_cannot_drive_it(self):
+        # DNS rebinding (foreign Host) and cross-site form posts (non-JSON) are refused.
+        self.assertEqual(self.call("/api/info", host="evil.example")[0], 403)
+        status, _ = self.call("/api/ask", {"question": "hi"}, content_type="text/plain")
+        self.assertEqual(status, 403)
+
+    def test_failures_show_up_on_the_page(self):
+        with mock.patch.object(web, "make_client", side_effect=ollama.OllamaError("not installed")):
+            job_id = json.loads(self.call("/api/ask", {"question": "hi", "roster": "local"})[1])["id"]
+            for _ in range(100):
+                job = json.loads(self.call(f"/api/job/{job_id}")[1])
+                if job["status"] in ("done", "error"):
+                    break
+                time.sleep(0.02)
+        self.assertEqual(job["status"], "error")
+        self.assertIn("not installed", job["error"])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 # The Council roster. Swap any model ID here, no code changes needed.
 # Verify every ID (no key needed, $0):  python -m council --check
+# Rosters use OpenRouter unless they say provider = "ollama" (local, no key).
 
 [settings]
 timeout_seconds = 120
@@ -52,4 +53,33 @@ role = "You focus on structure: components, boundaries, how it scales."
 [[rosters.free.members]]
 name = "Tactician"
 model = "poolside/laguna-s-2.1:free"
+role = "You are the skeptic: find what will break, what's missing, what's overkill."
+
+# ---------------------------------------------------------------- local (no key, no account, $0)
+# Runs on your own PC through Ollama (https://ollama.com). Setup: .\setup.ps1 -Local
+# Downloads ~10 GB once. Used automatically when no OpenRouter key is found.
+[rosters.local]
+provider = "ollama"
+max_parallel = 1          # one model at a time, unloaded after it answers: fits an ordinary PC
+timeout_seconds = 600     # CPUs are slower than cloud GPUs
+chair = "gemma3:4b"
+
+[[rosters.local.members]]
+name = "Chief of Staff"
+model = "gemma3:4b"           # Google
+role = "You keep the big picture: priorities, trade-offs, what matters most."
+
+[[rosters.local.members]]
+name = "Lead Engineer"
+model = "qwen3:4b"            # Alibaba
+role = "You focus on how to actually build it: concrete steps, code, pitfalls."
+
+[[rosters.local.members]]
+name = "Architect"
+model = "phi4-mini"           # Microsoft
+role = "You focus on structure: components, boundaries, how it scales."
+
+[[rosters.local.members]]
+name = "Tactician"
+model = "llama3.2:3b"         # Meta
 role = "You are the skeptic: find what will break, what's missing, what's overkill."
